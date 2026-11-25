@@ -1,0 +1,226 @@
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Coins, History, RotateCw, X, Zap
+} from "lucide-react";
+
+const games = [
+  { id: "neon", name: "Neon Rush", tagline: "Fast lights. Bigger rewards.", cost: 10, symbols: ["⚡","💎","🍒","🔮","7️⃣"], accent: "pink", multiplier: 4 },
+  { id: "galaxy", name: "Galaxy Spin", tagline: "Spin beyond the stars.", cost: 15, symbols: ["🌙","🪐","⭐","☄️","💠"], accent: "blue", multiplier: 5 },
+  { id: "fortune", name: "Cyber Fortune", tagline: "Your next jackpot awaits.", cost: 20, symbols: ["👾","🧿","💰","🔱","💜"], accent: "gold", multiplier: 6 }
+];
+const betOptions = [0.5, 1, 2, 3, 5, 10, 20, 30, 40, 50, 80, 100];
+const paylines = [
+  [0,1,2,3,4],
+  [5,6,7,8,9],
+  [10,11,12,13,14],
+  [0,6,12,8,14],
+  [10,6,2,8,14]
+];
+
+function createGrid(game) {
+  return Array.from(
+    { length: 15 },
+    () => game.symbols[Math.floor(Math.random() * game.symbols.length)]
+  );
+}
+
+function getWinningLines(grid) {
+  return paylines.flatMap(line => {
+    const symbol = grid[line[0]];
+    let count = 1;
+    for (let i = 1; i < line.length; i++) {
+      if (grid[line[i]] !== symbol) break;
+      count++;
+    }
+    return count >= 3 ? [{ line, count }] : [];
+  });
+}
+
+function createGridForOutcome(game, outcome) {
+  for (let attempt = 0; attempt < 10000; attempt++) {
+    const grid = createGrid(game);
+    const wins = getWinningLines(grid);
+    const matchesOutcome = outcome === "loss"
+      ? wins.length === 0
+      : wins.length === 1 && wins[0].count === outcome;
+    if (matchesOutcome) return grid;
+  }
+  throw new Error(`Could not generate a ${outcome} slot result.`);
+}
+
+export default function SlotsPage({ coins, history, onWager, onSpinComplete }) {
+  const [activeGame, setActiveGame] = useState(games[0]);
+  const [selectedBet, setSelectedBet] = useState(0.5);
+  const [showBetMenu, setShowBetMenu] = useState(false);
+  const [reels, setReels] = useState(() => createGrid(games[0]));
+  const [spinning, setSpinning] = useState(false);
+  const [stoppedColumns, setStoppedColumns] = useState([]);
+  const [winningIndices, setWinningIndices] = useState([]);
+  const [result, setResult] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const stopTimers = useRef([]);
+  const spinInterval = useRef(null);
+  const stoppedColumnsRef = useRef([]);
+  const currentBet = selectedBet;
+
+  useEffect(() => () => {
+    stopTimers.current.forEach(clearTimeout);
+    if (spinInterval.current) clearInterval(spinInterval.current);
+  }, []);
+
+  function spin() {
+    if (spinning) return;
+    if (coins < currentBet) {
+      setResult({ type:"error", title:"Not enough Cyber Coins", message:`You need ${currentBet} CC to play ${activeGame.name} at this bet.` });
+      return;
+    }
+    if (!onWager(currentBet)) return;
+
+    setSpinning(true);
+    setStoppedColumns([]);
+    setWinningIndices([]);
+    stoppedColumnsRef.current = [];
+    setResult(null);
+    let ticks = 0;
+    spinInterval.current = setInterval(() => {
+      setReels(previous => previous.map((symbol, index) =>
+        stoppedColumnsRef.current.includes(index % 5)
+          ? symbol
+          : activeGame.symbols[Math.floor(Math.random() * activeGame.symbols.length)]
+      ));
+      ticks++;
+      if (ticks >= 13) {
+        clearInterval(spinInterval.current);
+        const roll = Math.random();
+        const outcome = roll < 0.005 ? 5 : roll < 0.045 ? 4 : roll < 0.35 ? 3 : "loss";
+        const final = createGridForOutcome(activeGame, outcome);
+        const winningMatches = getWinningLines(final);
+        let reward = 0;
+        let longestMatch = 0;
+        const winningLines = winningMatches.length;
+        const winningTiles = winningMatches.flatMap(({ line, count }) => {
+          longestMatch = Math.max(longestMatch, count);
+          reward += currentBet * (count === 3 ? 2 : count === 4 ? 5 : activeGame.multiplier * 3);
+          return line.slice(0, count);
+        });
+        setWinningIndices([...new Set(winningTiles)]);
+
+        for (let column = 0; column < 5; column++) {
+          const timerId = setTimeout(() => {
+            setReels(previous => {
+              const stopped = [...previous];
+              for (let row = 0; row < 3; row++) {
+                stopped[row * 5 + column] = final[row * 5 + column];
+              }
+              return stopped;
+            });
+            stoppedColumnsRef.current = [...stoppedColumnsRef.current, column];
+            setStoppedColumns(previous => [...previous, column]);
+          }, 220 * (column + 1));
+          stopTimers.current.push(timerId);
+        }
+
+        const resultTimer = setTimeout(() => {
+          const outcome = longestMatch === 5 ? "Jackpot" : winningLines ? `${winningLines} line${winningLines>1?"s":""} win` : "You Lost";
+          const entry = { id:Date.now(), game:activeGame.name, reels:final, cost:currentBet, reward, outcome, date:new Date().toLocaleString() };
+          onSpinComplete(entry);
+          setResult({
+            type:reward?"win":"lose",
+            title:longestMatch===5?"MEGA JACKPOT!":winningLines?"YOU WIN!":"YOU LOST",
+            message:reward?`You won ${reward} Cyber Coins across ${winningLines} line${winningLines>1?"s":""}!`:`No matching symbols. You lost ${currentBet} Cyber Coins.`,
+            bet:currentBet,
+            reward
+          });
+          setSpinning(false);
+        }, 1550);
+        stopTimers.current.push(resultTimer);
+      }
+    }, 95);
+  }
+
+  return <section className="content">
+    <div className="eyebrow"><span/> THE SLOT IS ONLINE</div>
+    <div className="hero-row"><div>
+      <h1>ENTER THE <em>SLOT GRID.</em></h1>
+      <p className="subtitle">Three 5-reel machines. Five paylines. One neon city.</p>
+      </div><button className="outline-btn" onClick={()=>setShowHistory(true)}>
+        <History size={16}/> SPIN HISTORY</button>
+      </div>
+    <div className="game-tabs">
+      {games.map(game=><button key={game.id} disabled={spinning} className={`game-tab ${activeGame.id===game.id?"selected "+game.accent:""}`} onClick={()=>{setActiveGame(game);setResult(null);setReels(createGrid(game));}}>
+        <span className="tab-icon">{game.id==="neon"?"⚡":game.id==="galaxy"?"🪐":"🔮"}</span>
+        <span><b>{game.name}</b><small>{game.cost} CC BASE BET</small></span>
+      </button>)}
+    </div>
+    <div className={`machine-panel ${activeGame.accent}`}>
+      <div className="machine-top"><div><div className="machine-kicker">NOW PLAYING</div><h2>{activeGame.name}</h2><p>{activeGame.tagline}</p></div><div className="machine-status"><span className="pulse"/> READY TO SPIN</div></div>
+      <div className="slot-machine">
+        <div className="machine-label">◆ {activeGame.name.toUpperCase()} ◆</div>
+        <div className={`reels ${spinning?"is-spinning":""}`}>{reels.map((symbol,i)=><div className={`reel ${stoppedColumns.includes(i%5)?"stopped":""} ${winningIndices.includes(i)&&!spinning?"winner":""}`} key={i}><span>{symbol}</span></div>)}</div>
+        <div className="payline"><span/> 5 REELS · 5 PAYLINES <span/></div>
+        <div className="machine-foot"><span>3 MATCH = 2× BET</span>
+        <span>4 MATCH = 5× BET</span><span>5 MATCH = JACKPOT</span>
+        </div>
+      </div>
+      <div className="bet-controls">
+        <div className="bet-selector">
+          <button
+            className="bet-trigger"
+            disabled={spinning}
+            aria-expanded={showBetMenu}
+            onClick={()=>setShowBetMenu(open=>!open)}
+          >
+            <small>BET</small>
+            <b><Coins size={16}/>{currentBet} CC</b>
+          </button>
+          {showBetMenu&&<div className="bet-menu" onClick={event=>event.stopPropagation()}>
+            {betOptions.map(option=><button
+              key={option}
+              className={selectedBet===option?"selected":""}
+              disabled={spinning}
+              onClick={()=>setSelectedBet(option)}
+            >{option}</button>)}
+          </div>}
+        </div>
+        <button className="spin-btn" disabled={spinning} onClick={spin}>
+          {spinning?<><RotateCw className="spin-icon"/> SPINNING...</>:<><Zap size={19}/> SPIN NOW</>}
+        </button>
+      </div>
+      <div className="machine-note">Play responsibly.</div>
+    </div>
+    <div className="section-heading">
+      <div>
+        <div className="eyebrow">CHOOSE YOUR MACHINE</div>
+      <h2>THE SLOT COLLECTION</h2></div>
+      <span className="muted">01 — 03</span>
+    </div>
+
+    {result && <div className="modal-backdrop result-backdrop" onClick={()=>setResult(null)}>
+      <div className={`spin-result-modal ${result.type}`} onClick={event=>event.stopPropagation()}><button className="modal-close" onClick={()=>setResult(null)} aria-label="Close result"><X/></button>
+      <div className="result-emblem">{result.type==="win"?"🏆":result.type==="lose"?"💀":"⚠️"}</div>
+      <div className="eyebrow">{result.type==="win"?"WINNER // SLOT PAYOUT":result.type==="lose"?"SPIN COMPLETE // NO PAYOUT":"BET UNAVAILABLE"}</div>
+      <h2>{result.title}</h2>
+      <p>{result.message}</p>
+      {result.type!=="error"&&<div className="result-stats">
+        <div><small>BET</small><b className="result-loss">-{result.bet} CC</b></div>
+        <div><small>PAYOUT</small><b className={result.reward?"result-win":"result-loss"}>{result.reward?`+${result.reward}`:"0"} CC</b></div>
+        <div><small>BALANCE</small><b>{coins.toLocaleString()} CC</b></div></div>}
+        <button className="spin-btn full" onClick={()=>setResult(null)}>CONTINUE</button>
+        </div>
+      </div>}
+
+    {showHistory && <div className="modal-backdrop" onClick={()=>setShowHistory(false)}>
+      <div className="history-modal" onClick={event=>event.stopPropagation()}><button className="modal-close" onClick={()=>setShowHistory(false)}><X/></button>
+      <div className="eyebrow">YOUR RECENT ACTIVITY</div>
+      <h2>SPIN HISTORY</h2>
+      {history.length===0?<div className="empty-history">No spins yet. Choose a machine and try your luck.</div>:
+      <div className="history-list">{history.map(entry=><div className="history-entry" key={entry.id}><div className="history-symbols">{entry.reels.join(" ")}</div>
+      <div className="history-detail">
+        <b>{entry.game}</b>
+        <small>{entry.date} · {entry.outcome}</small></div>
+        <div className={entry.reward?"history-win":"history-loss"}>{entry.reward?`+${entry.reward}`:`-${entry.cost}`} CC</div>
+        </div>)}</div>}<button className="outline-btn full" onClick={()=>setShowHistory(false)}>CLOSE HISTORY</button>
+        </div>
+        </div>}
+  </section>;
+}
